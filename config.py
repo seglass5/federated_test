@@ -1,8 +1,8 @@
 """
 config.py — Central configuration for the federated LoRA compliance demo.
 
-All hyperparameters and paths live here so Phase 2 only needs to touch this
-file to adjust the training setup.
+All hyperparameters and paths live here; both Phase 1 and Phase 2 source
+their settings exclusively from this module.
 """
 
 from pathlib import Path
@@ -17,6 +17,8 @@ NUM_ROUNDS: int = 5
 # Training settings
 # ---------------------------------------------------------------------------
 LOCAL_EPOCHS: int = 2
+BATCH_SIZE: int = 8
+LEARNING_RATE: float = 3e-4
 
 # ---------------------------------------------------------------------------
 # LoRA adapter settings
@@ -30,6 +32,8 @@ LORA_DROPOUT: float = 0.05
 # ---------------------------------------------------------------------------
 BASE_MODEL_NAME: str = "Qwen/Qwen2.5-0.5B"
 MAX_SEQ_LEN: int = 256
+# CPU-only; change to "cuda" if a GPU is available (not required for Phase 2)
+DEVICE: str = "cpu"
 
 # ---------------------------------------------------------------------------
 # Data paths

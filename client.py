@@ -1,64 +1,69 @@
 """
 client.py — Flower client definition for federated LoRA fine-tuning.
 
-Each FlowerClient represents one financial institution. In Phase 1 the fit
-and evaluate methods are stubs that return realistic-looking metrics without
-performing real training. Phase 2 will replace the stubs with actual LoRA
-fine-tuning via PEFT + Transformers.
+Each FlowerClient represents one financial institution. In fit(), the client
+genuinely fine-tunes a LoRA adapter on its local partition using a plain
+PyTorch training loop. Only the tiny LoRA delta weights are exchanged with
+the server — the frozen base model parameters never leave this process.
 """
 
-import json
-
 import numpy as np
+import torch
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
 import flwr as fl
 from flwr.common import NDArrays, Scalar
 
-from config import LOCAL_EPOCHS, PARTITION_DIR
+from config import BATCH_SIZE, DEVICE, LEARNING_RATE, LOCAL_EPOCHS
+from model import (
+    apply_lora,
+    count_lora_parameters,
+    get_lora_parameters,
+    load_base_model,
+    set_lora_parameters,
+)
+from data.dataset import load_client_dataset
 
 
 class FlowerClient(fl.client.NumPyClient):
     """Federated learning client representing a single financial institution."""
 
-    def __init__(self, client_id: int) -> None:
+    def __init__(self, client_id: int, device: str = DEVICE) -> None:
         self.client_id = client_id
-        self.dataset = self._load_partition()
+        self.device = device
 
-    # ------------------------------------------------------------------
-    # Data loading
-    # ------------------------------------------------------------------
+        # Load base model and wrap with LoRA adapter
+        base_model, self.tokenizer = load_base_model(device)
+        self.model = apply_lora(base_model)
+        self.model.train()
 
-    def _load_partition(self) -> list[dict]:
-        """Load this client's training partition from disk."""
-        partition_path = PARTITION_DIR / f"client_{self.client_id}" / "train.jsonl"
-        if not partition_path.exists():
-            raise FileNotFoundError(
-                f"Partition not found at {partition_path}. "
-                "Run `python data/partition.py` first."
-            )
-        with partition_path.open() as f:
-            records = [json.loads(line) for line in f if line.strip()]
-        print(f"[client {self.client_id}] Loaded {len(records)} training examples.")
-        return records
+        # Report adapter size so the compression ratio is visible in logs
+        stats = count_lora_parameters(self.model)
+        print(
+            f"[client {client_id}] LoRA parameters: "
+            f"{stats['lora_params']:,} / {stats['total_params']:,} "
+            f"({stats['ratio']:.4%})"
+        )
+
+        # Tokenise and store the local training partition
+        self.dataset = load_client_dataset(client_id, self.tokenizer)
+        print(f"[client {client_id}] Dataset ready — {len(self.dataset)} examples.")
 
     # ------------------------------------------------------------------
     # Flower NumPyClient interface
     # ------------------------------------------------------------------
 
     def get_parameters(self, config: dict[str, Scalar]) -> NDArrays:
-        """Return the current (stub) LoRA adapter parameters as numpy arrays.
-
-        Phase 2: replace with actual PEFT model parameter extraction.
-        """
-        # Return a single zero-filled array as a stand-in for LoRA weights
-        return [np.zeros(1, dtype=np.float32)]
+        """Return the current LoRA adapter parameters as numpy arrays."""
+        return get_lora_parameters(self.model)
 
     def set_parameters(self, parameters: NDArrays) -> None:
-        """Apply received (aggregated) parameters to the local model.
+        """Write received aggregated LoRA parameters back into the model.
 
-        Phase 2: deserialize and load into the PEFT adapter.
+        Called at the start of every fit() and evaluate() so the client
+        begins from the server's latest global adapter state.
         """
-        # No-op in Phase 1
-        pass
+        set_lora_parameters(self.model, parameters)
 
     def fit(
         self,
@@ -67,61 +72,94 @@ class FlowerClient(fl.client.NumPyClient):
     ) -> tuple[NDArrays, int, dict[str, Scalar]]:
         """Fine-tune the LoRA adapter on local data and return updated weights.
 
+        Steps:
+          1. Overwrite adapter weights with the server's aggregated parameters.
+          2. Run LOCAL_EPOCHS of AdamW optimisation (LoRA params only).
+          3. Return updated adapter weights, dataset size, and mean train loss.
+
         Returns:
-            parameters: updated adapter weights (unchanged in Phase 1 stub)
-            num_examples: size of the local training set
-            metrics: dict with training metrics for aggregation
+            (updated_parameters, num_examples, {"train_loss": float})
         """
         self.set_parameters(parameters)
+        self.model.train()
 
-        # TODO (Phase 2): Replace this stub with real LoRA fine-tuning.
-        #   Steps:
-        #     1. Load BASE_MODEL_NAME with AutoModelForCausalLM / AutoModelForSequenceClassification
-        #     2. Wrap with peft.get_peft_model using LoraConfig(r=LORA_R, lora_alpha=LORA_ALPHA,
-        #        lora_dropout=LORA_DROPOUT, target_modules=[...])
-        #     3. Tokenize self.dataset with AutoTokenizer
-        #     4. Run LOCAL_EPOCHS of gradient descent (e.g. via HuggingFace Trainer or manual loop)
-        #     5. Extract only the trainable LoRA delta weights with get_peft_model_state_dict()
-        #     6. Return those weights as NDArrays below
+        loader = DataLoader(self.dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-        stub_loss = 1.0
-        num_examples = len(self.dataset)
+        # Restrict the optimiser to LoRA parameters only — base model is frozen
+        lora_params = [p for n, p in self.model.named_parameters() if "lora_" in n]
+        optimizer = AdamW(lora_params, lr=LEARNING_RATE)
 
+        total_loss = 0.0
+        total_batches = 0
+
+        for _epoch in range(LOCAL_EPOCHS):
+            for batch in loader:
+                input_ids = batch["input_ids"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
+                labels = batch["labels"].to(self.device)
+
+                optimizer.zero_grad()
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                )
+                loss: torch.Tensor = outputs.loss
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+                total_batches += 1
+
+        mean_loss = total_loss / max(total_batches, 1)
         print(
             f"[client {self.client_id}] fit() — "
-            f"epochs={LOCAL_EPOCHS}, examples={num_examples}, loss={stub_loss:.4f} (stub)"
+            f"epochs={LOCAL_EPOCHS}, examples={len(self.dataset)}, "
+            f"train_loss={mean_loss:.4f}"
         )
-
-        return self.get_parameters(config={}), num_examples, {"loss": stub_loss}
+        return self.get_parameters(config={}), len(self.dataset), {"train_loss": mean_loss}
 
     def evaluate(
         self,
         parameters: NDArrays,
         config: dict[str, Scalar],
     ) -> tuple[float, int, dict[str, Scalar]]:
-        """Evaluate the model on the local partition's held-out portion.
+        """Compute mean cross-entropy loss on the local partition.
+
+        The evaluation runs over the same training partition used for fit().
+        In a production system this would be a held-out local test split; for
+        this demo it gives a consistent per-client loss signal.
 
         Returns:
-            loss: scalar loss value
-            num_examples: number of evaluation examples
-            metrics: dict with evaluation metrics
+            (eval_loss, num_examples, {"eval_loss": float})
         """
         self.set_parameters(parameters)
+        self.model.eval()
 
-        # TODO (Phase 2): Run real inference over a local eval split and compute
-        # cross-entropy loss and accuracy.
+        loader = DataLoader(self.dataset, batch_size=BATCH_SIZE, shuffle=False)
+        total_loss = 0.0
+        total_batches = 0
 
-        stub_loss = 1.0
-        num_examples = len(self.dataset)
-        stub_accuracy = 0.0
+        with torch.no_grad():
+            for batch in loader:
+                input_ids = batch["input_ids"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
+                labels = batch["labels"].to(self.device)
 
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                )
+                total_loss += outputs.loss.item()
+                total_batches += 1
+
+        mean_loss = total_loss / max(total_batches, 1)
         print(
             f"[client {self.client_id}] evaluate() — "
-            f"examples={num_examples}, loss={stub_loss:.4f}, "
-            f"accuracy={stub_accuracy:.4f} (stub)"
+            f"examples={len(self.dataset)}, eval_loss={mean_loss:.4f}"
         )
-
-        return stub_loss, num_examples, {"accuracy": stub_accuracy}
+        return mean_loss, len(self.dataset), {"eval_loss": mean_loss}
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +167,6 @@ class FlowerClient(fl.client.NumPyClient):
 # ---------------------------------------------------------------------------
 
 
-def make_client(client_id: int) -> FlowerClient:
+def make_client(client_id: int, device: str = DEVICE) -> FlowerClient:
     """Instantiate and return a FlowerClient for the given client ID."""
-    return FlowerClient(client_id=client_id)
+    return FlowerClient(client_id=client_id, device=device)

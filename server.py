@@ -6,10 +6,10 @@ In each round it:
   1. Sends the current global LoRA adapter weights to every client.
   2. Receives locally updated weights back.
   3. Aggregates them via FedAvg (weighted average by num_examples).
-  4. Logs per-round loss metrics.
+  4. Logs per-round train_loss and eval_loss metrics.
 
-Only LoRA delta weights travel the network — the base model weights never leave
-any institution.
+Only LoRA delta weights travel the network — the base model weights never
+leave any institution.
 """
 
 import flwr as fl
@@ -27,8 +27,8 @@ from config import NUM_CLIENTS
 def fit_metrics_aggregation_fn(metrics: list[tuple[int, Metrics]]) -> Metrics:
     """Aggregate fit metrics from all clients after each round.
 
-    Computes a weighted average of loss across clients, weighted by the number
-    of examples each client trained on.
+    Computes a weighted average of train_loss across clients, weighted by the
+    number of examples each client trained on.
 
     Args:
         metrics: list of (num_examples, metrics_dict) tuples, one per client.
@@ -40,25 +40,37 @@ def fit_metrics_aggregation_fn(metrics: list[tuple[int, Metrics]]) -> Metrics:
     if total_examples == 0:
         return {}
 
-    weighted_loss = sum(n * m["loss"] for n, m in metrics if "loss" in m)
-    avg_loss = weighted_loss / total_examples
+    weighted_loss = sum(n * m["train_loss"] for n, m in metrics if "train_loss" in m)
+    avg_train_loss = weighted_loss / total_examples
 
-    # Print per-round summary so progress is visible in the terminal
-    print(f"\n[server] Round complete — aggregated loss: {avg_loss:.6f} (across {len(metrics)} clients)\n")
-
-    return {"loss": avg_loss}
+    print(
+        f"\n[server] Round fit complete   — "
+        f"avg train_loss: {avg_train_loss:.6f}  (across {len(metrics)} clients)\n"
+    )
+    return {"train_loss": avg_train_loss}
 
 
 def evaluate_metrics_aggregation_fn(metrics: list[tuple[int, Metrics]]) -> Metrics:
-    """Aggregate evaluate metrics from all clients after each round."""
+    """Aggregate evaluate metrics from all clients after each round.
+
+    Args:
+        metrics: list of (num_examples, metrics_dict) tuples, one per client.
+
+    Returns:
+        Aggregated metrics dict logged by the Flower framework.
+    """
     total_examples = sum(n for n, _ in metrics)
     if total_examples == 0:
         return {}
 
-    weighted_acc = sum(n * m["accuracy"] for n, m in metrics if "accuracy" in m)
-    avg_acc = weighted_acc / total_examples
+    weighted_loss = sum(n * m["eval_loss"] for n, m in metrics if "eval_loss" in m)
+    avg_eval_loss = weighted_loss / total_examples
 
-    return {"accuracy": avg_acc}
+    print(
+        f"[server] Round eval complete  — "
+        f"avg eval_loss:  {avg_eval_loss:.6f}  (across {len(metrics)} clients)"
+    )
+    return {"eval_loss": avg_eval_loss}
 
 
 # ---------------------------------------------------------------------------

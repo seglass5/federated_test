@@ -8,8 +8,10 @@ This starts a local Flower simulation with NUM_CLIENTS virtual clients running
 NUM_ROUNDS of federated averaging. Ray is used for process-level isolation so
 each client runs in its own subprocess, mirroring a real multi-institution setup.
 
-Phase 1: clients return stub parameters and metrics.
-Phase 2: clients will perform real LoRA fine-tuning before returning weights.
+Memory note (Phase 2):
+    Each virtual client loads Qwen/Qwen2.5-0.5B independently (~1 GB float32).
+    With NUM_CLIENTS=3 this requires approximately 3 GB of free RAM.  If memory
+    is tight, lower NUM_CLIENTS in config.py before running.
 """
 
 import flwr as fl
@@ -18,15 +20,33 @@ from client import make_client
 from config import NUM_CLIENTS, NUM_ROUNDS
 from server import make_strategy
 
+# ---------------------------------------------------------------------------
+# Client cache — avoids reloading the model on every Flower callback
+# ---------------------------------------------------------------------------
+# Flower's simulation engine calls client_fn each time it needs a client
+# (once for fit, once for evaluate per round). The Ray actor for a given
+# client ID stays alive across calls in the same process, so a module-level
+# dict persists the loaded model and tokenizer rather than reloading them.
+
+_client_cache: dict[int, fl.client.NumPyClient] = {}
+
 
 def client_fn(cid: str) -> fl.client.NumPyClient:
-    """Instantiate a client for the given client ID string provided by Flower."""
-    return make_client(int(cid))
+    """Instantiate (or retrieve from cache) the client for *cid*."""
+    client_id = int(cid)
+    if client_id not in _client_cache:
+        _client_cache[client_id] = make_client(client_id)
+    return _client_cache[client_id]
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
 def main() -> None:
     print("=" * 60)
-    print("Federated Compliance LoRA — Phase 1 Simulation")
+    print("Federated Compliance LoRA — Phase 2 Simulation")
     print(f"  Clients  : {NUM_CLIENTS}")
     print(f"  Rounds   : {NUM_ROUNDS}")
     print("=" * 60)
@@ -45,12 +65,31 @@ def main() -> None:
     print("Simulation complete — ready for Phase 2")
     print("=" * 60)
 
-    # Surface final aggregated metrics if available
-    if history.metrics_distributed:
-        print("\nAggregated metrics per round:")
-        for metric_name, round_values in history.metrics_distributed.items():
-            for rnd, value in round_values:
-                print(f"  Round {rnd:>2} | {metric_name}: {value:.6f}")
+    # ------------------------------------------------------------------
+    # Final summary: show train_loss and eval_loss for every round
+    # ------------------------------------------------------------------
+    fit_metrics: dict = history.metrics_distributed_fit   # from fit aggregation
+    eval_metrics: dict = history.metrics_distributed       # from evaluate aggregation
+
+    train_by_round: dict[int, float] = {
+        rnd: val
+        for rnd, val in fit_metrics.get("train_loss", [])
+    }
+    eval_by_round: dict[int, float] = {
+        rnd: val
+        for rnd, val in eval_metrics.get("eval_loss", [])
+    }
+
+    all_rounds = sorted(set(train_by_round) | set(eval_by_round))
+    if all_rounds:
+        print("\nPer-round aggregated metrics:")
+        print(f"  {'Round':>5}  {'train_loss':>12}  {'eval_loss':>12}")
+        print(f"  {'-'*5}  {'-'*12}  {'-'*12}")
+        for rnd in all_rounds:
+            tl = f"{train_by_round[rnd]:.6f}" if rnd in train_by_round else "     —"
+            el = f"{eval_by_round[rnd]:.6f}" if rnd in eval_by_round else "     —"
+            print(f"  {rnd:>5}  {tl:>12}  {el:>12}")
+        print()
 
 
 if __name__ == "__main__":
