@@ -14,6 +14,7 @@ import random
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -23,12 +24,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import NUM_CLIENTS, PARTITION_DIR, SEED
 
 # Dirichlet concentration parameter — lower = more heterogeneous
-DIRICHLET_ALPHA = 0.5
+DIRICHLET_ALPHA: float = 0.5
 
-LABEL_NAMES = {0: "negative", 1: "neutral", 2: "positive"}
+LABEL_NAMES: dict[int, str] = {0: "negative", 1: "neutral", 2: "positive"}
 
 
-def download_dataset():
+def download_dataset() -> Any:
     """Download financial_phrasebank (sentences_allagree split) from HuggingFace."""
     from datasets import load_dataset
 
@@ -38,7 +39,12 @@ def download_dataset():
     return ds["train"]
 
 
-def dirichlet_partition(labels: list[int], num_clients: int, alpha: float, rng: np.random.Generator):
+def dirichlet_partition(
+    labels: list[int],
+    num_clients: int,
+    alpha: float,
+    rng: np.random.Generator,
+) -> list[list[int]]:
     """
     Partition indices into num_clients subsets using Dirichlet allocation
     over the label distribution.
@@ -68,7 +74,7 @@ def dirichlet_partition(labels: list[int], num_clients: int, alpha: float, rng: 
     return client_indices
 
 
-def print_distribution_table(client_splits: list[list[dict]], test_split: list[dict]):
+def print_distribution_table(client_splits: list[list[dict[str, Any]]], test_split: list[dict[str, Any]]) -> None:
     """Print a summary table of label counts per client and the test set."""
     label_ids = sorted(LABEL_NAMES.keys())
     col_w = 10
@@ -95,7 +101,7 @@ def print_distribution_table(client_splits: list[list[dict]], test_split: list[d
     print(f"\nDirichlet alpha={DIRICHLET_ALPHA}  (lower = more heterogeneous)\n")
 
 
-def save_jsonl(records: list[dict], path: Path):
+def save_jsonl(records: list[dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
         for rec in records:
@@ -103,7 +109,7 @@ def save_jsonl(records: list[dict], path: Path):
     print(f"  Saved {len(records):>5} records -> {path}")
 
 
-def main():
+def main() -> None:
     random.seed(SEED)
     np.random.seed(SEED)
     rng = np.random.default_rng(SEED)

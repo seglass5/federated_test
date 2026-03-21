@@ -12,13 +12,11 @@ Only LoRA delta weights travel the network — the base model weights never leav
 any institution.
 """
 
-from typing import Optional
-
 import flwr as fl
-from flwr.common import Metrics, Scalar
+from flwr.common import Metrics
 from flwr.server.strategy import FedAvg
 
-from config import NUM_CLIENTS, NUM_ROUNDS
+from config import NUM_CLIENTS
 
 
 # ---------------------------------------------------------------------------

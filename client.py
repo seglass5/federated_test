@@ -8,8 +8,6 @@ fine-tuning via PEFT + Transformers.
 """
 
 import json
-from pathlib import Path
-from typing import Any
 
 import numpy as np
 import flwr as fl
