@@ -8,11 +8,17 @@ This starts a local Flower simulation with NUM_CLIENTS virtual clients running
 NUM_ROUNDS of federated averaging. Ray is used for process-level isolation so
 each client runs in its own subprocess, mirroring a real multi-institution setup.
 
-Memory note (Phase 2):
+After the final round the strategy automatically writes:
+    results/federated_adapter.npz  — aggregated LoRA weights
+    results/round_metrics.csv      — per-round train_loss and eval_loss
+
+Memory note (Phase 2 / Phase 3):
     Each virtual client loads Qwen/Qwen2.5-0.5B independently (~1 GB float32).
     With NUM_CLIENTS=3 this requires approximately 3 GB of free RAM.  If memory
     is tight, lower NUM_CLIENTS in config.py before running.
 """
+
+from pathlib import Path
 
 import flwr as fl
 
@@ -45,6 +51,9 @@ def client_fn(cid: str) -> fl.client.NumPyClient:
 
 
 def main() -> None:
+    # Ensure the results directory exists before the strategy tries to write to it
+    Path("results").mkdir(parents=True, exist_ok=True)
+
     print("=" * 60)
     print("Federated Compliance LoRA — Phase 2 Simulation")
     print(f"  Clients  : {NUM_CLIENTS}")
