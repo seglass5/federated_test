@@ -1,0 +1,13 @@
+flwr[simulation]==1.8.0
+datasets==2.19.0
+numpy==1.26.4
+torch==2.2.2
+transformers==4.40.0
+peft==0.10.0
+scipy
+tqdm
+# Phase 3 additions
+matplotlib
+pandas
+scikit-learn
+tabulate
