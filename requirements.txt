@@ -4,6 +4,7 @@ numpy==1.26.4
 torch==2.2.2
 transformers==4.40.0
 peft==0.10.0
+ray==2.54.1
 scipy
 tqdm
 # Phase 3 additions

@@ -12,10 +12,13 @@ After the final round the strategy automatically writes:
     results/federated_adapter.npz  — aggregated LoRA weights
     results/round_metrics.csv      — per-round train_loss and eval_loss
 
-Memory note (Phase 2 / Phase 3):
-    Each virtual client loads Qwen/Qwen2.5-0.5B independently (~1 GB float32).
-    With NUM_CLIENTS=3 this requires approximately 3 GB of free RAM.  If memory
-    is tight, lower NUM_CLIENTS in config.py before running.
+Memory note:
+    Each virtual client loads Qwen/Qwen2.5-0.5B independently.  In float32 the
+    model plus gradients and optimiser state peak at ~7–10 GB per client process.
+    To prevent OOM the simulation runs clients sequentially: client_resources is
+    set to {"num_cpus": NUM_CLIENTS} so Ray can only schedule one client at a
+    time given the NUM_CLIENTS total CPUs allocated to the Ray instance.  This
+    keeps peak memory at one model's worth regardless of NUM_CLIENTS.
 """
 
 from pathlib import Path
@@ -66,6 +69,10 @@ def main() -> None:
         num_clients=NUM_CLIENTS,
         config=fl.server.ServerConfig(num_rounds=NUM_ROUNDS),
         strategy=make_strategy(),
+        # Each client claims all available CPUs → only one runs at a time.
+        # This prevents the ~7–10 GB per-client peak from stacking across
+        # all NUM_CLIENTS processes simultaneously and causing OOM.
+        client_resources={"num_cpus": NUM_CLIENTS, "num_gpus": 0.0},
         ray_init_args={"num_cpus": NUM_CLIENTS},
     )
 
