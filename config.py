@@ -16,7 +16,7 @@ NUM_ROUNDS: int = 5
 # ---------------------------------------------------------------------------
 # Training settings
 # ---------------------------------------------------------------------------
-LOCAL_EPOCHS: int = 2
+LOCAL_EPOCHS: int = 1   # was 2; halves per-round training time on CPU
 BATCH_SIZE: int = 8
 LEARNING_RATE: float = 3e-4
 
@@ -31,7 +31,7 @@ LORA_DROPOUT: float = 0.05
 # Model settings
 # ---------------------------------------------------------------------------
 BASE_MODEL_NAME: str = "Qwen/Qwen2.5-0.5B"
-MAX_SEQ_LEN: int = 256
+MAX_SEQ_LEN: int = 128  # was 256; quartered attention compute per batch
 # CPU-only; change to "cuda" if a GPU is available (not required for Phase 2)
 DEVICE: str = "cpu"
 
